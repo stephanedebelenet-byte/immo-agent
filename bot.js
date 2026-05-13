@@ -6,7 +6,7 @@ const { CronJob }          = require('cron');
 const fs                   = require('fs');
 const path                 = require('path');
 const http                 = require('http');
-const { runScraper, runQuickScan, generateCSV, CFG } = require('./agent');
+const { runScraper, runQuickScan, generateCSV, CFG, TYPE_CONFIG } = require('./agent');
 
 // Webhook config
 const PORT         = parseInt(process.env.PORT || '3000');
@@ -42,11 +42,29 @@ function fmtPrice(n) {
 }
 
 function fmtListingMessage(l, i) {
+  const typeEmoji = TYPE_CONFIG?.[l.type]?.emoji || '';
+  const typeLabel = TYPE_CONFIG?.[l.type]?.label || l.type || '';
+  const header    = `*${i}. ${typeEmoji} [${l.source}·${typeLabel}] ${l.quartier}*`;
+  const prixLine  = `💰 ${fmtPrice(l.prix)}${l.surface ? ` · ${l.surface} m²` : ''}${l.prixM2 ? ` · *${l.prixM2.toLocaleString('fr-FR')} DH/m²*` : ''}`;
+
+  let rentLine;
+  if (l.type === 'terrain') {
+    if (l.vsMarche != null) {
+      const sign  = l.vsMarche > 0 ? '+' : '';
+      const label = l.vsMarche <= -10 ? '🟢 Sous le marché' : l.vsMarche >= 10 ? '🔴 Au-dessus du marché' : '🟡 Prix marché';
+      rentLine = `📊 ${label} : *${sign}${l.vsMarche}%* vs benchmark Casablanca`;
+    } else {
+      rentLine = `📊 Terrain — prix/m² à comparer`;
+    }
+  } else {
+    rentLine = `📊 Brut: *${l.rentBrut ?? '-'}%* · Net: *${l.rentNet ?? '-'}%*`;
+  }
+
   const lines = [
-    `*${i}. [${l.source}] ${l.quartier}*`,
-    `💰 ${fmtPrice(l.prix)}${l.surface ? ` · ${l.surface} m²` : ''}${l.prixM2 ? ` · *${l.prixM2.toLocaleString('fr-FR')} DH/m²*` : ''}`,
-    `📊 Brut: *${l.rentBrut ?? '-'}%* · Net: *${l.rentNet ?? '-'}%*`,
-    l.loyer ? `🏡 Loyer ~${l.loyer.toLocaleString('fr-FR')} DH/mois _(${l.loyerSource})_` : null,
+    header,
+    prixLine,
+    rentLine,
+    l.loyer ? `🔑 Loyer ~${l.loyer.toLocaleString('fr-FR')} DH/mois _(${l.loyerSource})_` : null,
     l.date  ? `📅 ${new Date(l.date).toLocaleDateString('fr-FR')}` : null,
     l.url   ? `🔗 [Voir l'annonce](${l.url})` : null,
   ];
@@ -59,7 +77,8 @@ async function sendResults(ctx, listings, limit = 10) {
   const top = listings.slice(0, limit);
   const date = lastScanDate ? lastScanDate.toLocaleDateString('fr-FR') : '-';
   const header = `🏆 *Top ${top.length} opportunités* — ${date}\n` +
-                 `Budget max : ${CFG.maxPrice.toLocaleString('fr-FR')} MAD\n\n`;
+                 `Budget max : ${CFG.maxPrice.toLocaleString('fr-FR')} MAD\n` +
+                 `🏠 Appart · 🏢 Bureau · 🌿 Terrain · 🏘️ Maison · 🏪 Magasin\n\n`;
 
   // Découpe en chunks (limite Telegram 4096 chars)
   const chunks = [header];
@@ -94,7 +113,9 @@ async function doScan(ctx) {
   }
   isRunning = true;
   const msg = await ctx.reply(
-    '🔍 Scan lancé sur *Avito · Facebook · Mubawab · Yakeey*\n⏱ Durée estimée : 5-10 min\nJe t\'envoie les résultats dès que c\'est prêt.',
+    '🔍 Scan lancé — *Avito · Facebook · Mubawab · Yakeey*\n' +
+    '🏠 Appart · 🏢 Bureau · 🌿 Terrain · 🏘️ Maison · 🏪 Magasin\n' +
+    '⏱ Durée estimée : 8-15 min\nJe t\'envoie les résultats dès que c\'est prêt.',
     { parse_mode: 'Markdown' }
   );
 
@@ -118,7 +139,9 @@ async function doScan(ctx) {
 bot.command('start', ctx => {
   ctx.replyWithMarkdown(
     `🏠 *Agent Immobilier Casablanca*\n\n` +
-    `Je scrape Avito, Facebook Marketplace, Mubawab et Yakeey pour trouver les meilleures opportunités d'investissement locatif.\n\n` +
+    `Je scrape Avito, Facebook, Mubawab et Yakeey pour tous types de biens :\n` +
+    `🏠 Appartements · 🏢 Bureaux · 🌿 Terrains · 🏘️ Maisons · 🏪 Magasins\n\n` +
+    `Rentabilité calculée par type · Terrains comparés au marché Yakeey\n\n` +
     `*Commandes :*\n` +
     `/scan — Lancer un scan complet\n` +
     `/top10 — Top 10 du dernier scan\n` +

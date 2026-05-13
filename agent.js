@@ -293,6 +293,88 @@ async function scrapeYakeey() {
   return listings;
 }
 
+// ─── CALIBRATION LOYERS via Yakeey Location ───────────────────────────────
+// Scrape les annonces de location Yakeey → calcule le vrai DH/m²/mois par quartier
+async function calibrateRatesFromYakeey() {
+  console.log('  → Calibration loyers (Yakeey location)...');
+
+  // bucket: { quartier → [DH/m²] }
+  const buckets = {};
+
+  const pushSample = (quartier, loyer, surface) => {
+    if (!quartier || !loyer || !surface || surface < 20 || surface > 400) return;
+    const rate = loyer / surface;
+    if (rate < 20 || rate > 200) return; // filtre aberrations
+    const q = quartier.toLowerCase();
+    buckets[q] = buckets[q] || [];
+    buckets[q].push(rate);
+  };
+
+  try {
+    for (let page = 1; page <= 4; page++) {
+      const url = `https://yakeey.com/fr-ma/location?city=casablanca&type=appartement&page=${page}`;
+      const { data } = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+      const $ = cheerio.load(data);
+
+      $('[class*="PropertyCard"], [class*="listing-card"], [class*="property-item"], article').each((_, el) => {
+        const locT   = $(el).find('[class*="location"], [class*="city"], [class*="zone"]').first().text().trim();
+        const priceT = $(el).find('[class*="price"], [class*="Price"]').first().text().trim();
+        const surfT  = $(el).find('[class*="surface"], [class*="area"], [class*="size"]').first().text().trim();
+        const titleT = $(el).find('[class*="title"], h2, h3').first().text().trim();
+
+        const loyer   = parsePrice(priceT);
+        const surface = extractSurface(surfT || titleT);
+        const quartier = extractQuartier(locT || titleT);
+
+        // Yakeey location : prix en DH/mois (fourchette 1 000–50 000)
+        if (loyer >= 1000 && loyer <= 50000) {
+          pushSample(quartier, loyer, surface);
+        }
+      });
+
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  } catch (e) {
+    console.error(`  ✗ Calibration Yakeey: ${e.message}`);
+    return; // garde les taux statiques
+  }
+
+  // Calcule la médiane pour chaque quartier et met à jour RATES
+  let updated = 0;
+  for (const [quartier, samples] of Object.entries(buckets)) {
+    if (samples.length < 2) continue; // besoin d'au moins 2 points
+    samples.sort((a, b) => a - b);
+    const median = samples[Math.floor(samples.length / 2)];
+    const rounded = Math.round(median);
+
+    // Trouve la clé dans RATES (correspondance partielle)
+    const key = Object.keys(RATES).find(k =>
+      quartier.includes(k.normalize('NFD').replace(/[̀-ͯ]/g, '')) ||
+      k.normalize('NFD').replace(/[̀-ͯ]/g, '').includes(quartier)
+    );
+
+    if (key) {
+      const old = RATES[key];
+      RATES[key] = rounded;
+      if (old !== rounded) {
+        console.log(`    ↻ ${key}: ${old} → ${rounded} DH/m²/mois (${samples.length} annonces)`);
+        updated++;
+      }
+    } else if (rounded > 0) {
+      // Nouveau quartier non connu : on l'ajoute
+      RATES[quartier] = rounded;
+      console.log(`    + ${quartier}: ${rounded} DH/m²/mois (${samples.length} annonces) [nouveau]`);
+      updated++;
+    }
+  }
+
+  if (updated === 0) {
+    console.log('    Taux déjà à jour ou données insuffisantes');
+  } else {
+    console.log(`    ${updated} quartier(s) recalibrés depuis Yakeey`);
+  }
+}
+
 // ─── DEDUP ────────────────────────────────────────────────────────────────
 function dedup(listings) {
   const seen = new Set();
@@ -370,8 +452,12 @@ async function main() {
 
   if (!fs.existsSync(CFG.outputDir)) fs.mkdirSync(CFG.outputDir, { recursive: true });
 
+  // Étape 0 : calibration des taux locatifs depuis Yakeey
+  console.log('📐  Calibration des loyers marché (Yakeey)...\n');
+  await calibrateRatesFromYakeey();
+
   // Scrape all sources in parallel
-  console.log('🔍  Scraping en cours...\n');
+  console.log('\n🔍  Scraping annonces en cours...\n');
   const [r1, r2, r3, r4] = await Promise.allSettled([
     scrapeAvito(),
     scrapeFacebook(),
@@ -431,6 +517,7 @@ async function main() {
 
 // ─── EXPORT (pour bot.js) ─────────────────────────────────────────────────
 async function runScraper() {
+  await calibrateRatesFromYakeey();
   const [r1, r2, r3, r4] = await Promise.allSettled([
     scrapeAvito(),
     scrapeFacebook(),

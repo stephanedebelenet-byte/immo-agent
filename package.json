@@ -7,6 +7,9 @@
     "start": "node agent.js",
     "report": "node agent.js --report-only"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "apify-client": "^2.9.3",
     "axios": "^1.16.1",

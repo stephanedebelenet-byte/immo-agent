@@ -3,8 +3,16 @@
 require('dotenv').config();
 
 const { ApifyClient } = require('apify-client');
+const axios           = require('axios');
+const cheerio         = require('cheerio');
 const fs = require('fs');
 const path = require('path');
+
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  'Accept-Language': 'fr-FR,fr;q=0.9',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+};
 
 // ─── SETUP ────────────────────────────────────────────────────────────────
 const TOKEN = process.env.APIFY_TOKEN;
@@ -121,36 +129,45 @@ function normalize(listing) {
   };
 }
 
-// ─── AVITO ────────────────────────────────────────────────────────────────
+// ─── AVITO (scraping direct — gratuit) ───────────────────────────────────
 async function scrapeAvito() {
-  console.log('  → Avito...');
+  console.log('  → Avito (direct)...');
+  const listings = [];
   try {
-    const run = await apify.actor('easyapi/avito-search-results-scraper').call({
-      search:   `appartement vente ${CFG.city}`,
-      maxItems:  CFG.maxItems,
-    }, { memory: 4096 });
+    for (let page = 1; page <= 3; page++) {
+      const url = `https://www.avito.ma/fr/maroc/appartements--%C3%A0_vendre?o=${page}&location=Casablanca&price_max=${CFG.maxPrice}`;
+      const { data } = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+      const $ = cheerio.load(data);
 
-    const { items } = await apify.dataset(run.defaultDatasetId).listItems({ limit: 150 });
+      $('article, [data-testid="ad-card"], .sc-1nre5ec-1').each((_, el) => {
+        const title  = $(el).find('h3, [data-testid="ad-title"], .sc-1nre5ec-10').first().text().trim();
+        const priceT = $(el).find('[data-testid="price"], .sc-1x0vz2r-0, .price').first().text().trim();
+        const locT   = $(el).find('[data-testid="location"], .sc-1nre5ec-12').first().text().trim();
+        const dateT  = $(el).find('time, [data-testid="date"]').first().attr('datetime') || null;
+        const href   = $(el).find('a').first().attr('href') || '';
 
-    return items
-      .filter(i => {
-        const p = parsePrice(i.price || i.prix || '');
-        return p >= 200000 && p <= CFG.maxPrice;
-      })
-      .map(i => ({
-        source:   'Avito',
-        titre:    i.title   || i.titre || '',
-        quartier: extractQuartier(i.location || i.city || i.localisation || ''),
-        surface:  extractSurface(i.title || i.description || ''),
-        prix:     parsePrice(i.price || i.prix || ''),
-        loyer:    null,
-        date:     i.date || i.publishedAt || i.created_at || null,
-        url:      i.url || i.link || '',
-      }));
+        const prix = parsePrice(priceT);
+        if (!prix || prix < 200000 || prix > CFG.maxPrice) return;
+        if (!isMaRealEstate(title)) return;
+
+        listings.push({
+          source:   'Avito',
+          titre:    title,
+          quartier: extractQuartier(locT || title),
+          surface:  extractSurface(title),
+          prix,
+          loyer:    null,
+          date:     dateT,
+          url:      href.startsWith('http') ? href : 'https://www.avito.ma' + href,
+        });
+      });
+
+      await new Promise(r => setTimeout(r, 1200));
+    }
   } catch (e) {
     console.error(`  ✗ Avito: ${e.message}`);
-    return [];
   }
+  return listings;
 }
 
 // ─── FACEBOOK MARKETPLACE ─────────────────────────────────────────────────
@@ -194,89 +211,86 @@ async function scrapeFacebook() {
   return results.flat();
 }
 
-// ─── MUBAWAB ──────────────────────────────────────────────────────────────
+// ─── MUBAWAB (scraping direct — gratuit) ─────────────────────────────────
 async function scrapeMubawab() {
-  console.log('  → Mubawab...');
+  console.log('  → Mubawab (direct)...');
+  const listings = [];
   try {
-    const run = await apify.actor('scraper_guru/mubawab-housing-scraper').call({
-      city:     'casablanca',
-      maxItems:  CFG.maxItems,
-    }, { memory: 4096 });
+    for (let page = 1; page <= 3; page++) {
+      const url = `https://www.mubawab.ma/fr/sc/immobilier-a-vendre:p:${page}?city=casablanca&priceMax=${CFG.maxPrice}`;
+      const { data } = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+      const $ = cheerio.load(data);
 
-    const { items } = await apify.dataset(run.defaultDatasetId).listItems({ limit: 150 });
+      $('li.listingBox, .sc-card-listing').each((_, el) => {
+        const title  = $(el).find('h2, h3, .listingTit').first().text().trim();
+        const priceT = $(el).find('.price, .listingPrice, [class*="price"]').first().text().trim();
+        const locT   = $(el).find('.listingDetails, [class*="location"], [class*="city"]').first().text().trim();
+        const href   = $(el).find('a').first().attr('href') || '';
+        const surfT  = $(el).find('[class*="size"], [class*="surface"]').first().text().trim();
 
-    return items
-      .filter(i => {
-        const p = parsePrice(i.price || '');
-        return p >= 200000 && p <= CFG.maxPrice;
-      })
-      .map(i => ({
-        source:   'Mubawab',
-        titre:    i.title || '',
-        quartier: extractQuartier(i.district || i.neighborhood || i.location || ''),
-        surface:  i.surface || i.area || extractSurface(i.title || i.description || ''),
-        prix:     parsePrice(i.price || ''),
-        loyer:    null,
-        date:     null,
-        url:      i.url || '',
-      }));
+        const prix = parsePrice(priceT);
+        if (!prix || prix < 200000 || prix > CFG.maxPrice) return;
+
+        listings.push({
+          source:   'Mubawab',
+          titre:    title,
+          quartier: extractQuartier(locT || title),
+          surface:  extractSurface(surfT || title),
+          prix,
+          loyer:    null,
+          date:     null,
+          url:      href.startsWith('http') ? href : 'https://www.mubawab.ma' + href,
+        });
+      });
+
+      await new Promise(r => setTimeout(r, 1200));
+    }
   } catch (e) {
     console.error(`  ✗ Mubawab: ${e.message}`);
-    return [];
   }
+  return listings;
 }
 
-// ─── YAKEEY (via RAG browser) ─────────────────────────────────────────────
+// ─── YAKEEY (scraping direct — gratuit) ──────────────────────────────────
 async function scrapeYakeey() {
-  console.log('  → Yakeey...');
+  console.log('  → Yakeey (direct)...');
+  const listings = [];
   try {
-    const run = await apify.actor('apify/rag-web-browser').call({
-      query: `appartement vente Casablanca site:yakeey.com`,
-      startUrls: [{
-        url: `https://yakeey.com/fr-ma/achat?maxPrice=${CFG.maxPrice}&city=casablanca&type=appartement`,
-      }],
-      maxCrawlPages: 2,
-    }, { memory: 4096 });
+    for (let page = 1; page <= 3; page++) {
+      const url = `https://yakeey.com/fr-ma/achat?maxPrice=${CFG.maxPrice}&city=casablanca&type=appartement&page=${page}`;
+      const { data } = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+      const $ = cheerio.load(data);
 
-    const { items } = await apify.dataset(run.defaultDatasetId).listItems({ limit: 50 });
-    const listings = [];
+      // Yakeey listing cards
+      $('[class*="PropertyCard"], [class*="listing-card"], [class*="property-item"], article').each((_, el) => {
+        const title  = $(el).find('[class*="title"], h2, h3').first().text().trim();
+        const priceT = $(el).find('[class*="price"], [class*="Price"]').first().text().trim();
+        const locT   = $(el).find('[class*="location"], [class*="city"], [class*="zone"]').first().text().trim();
+        const surfT  = $(el).find('[class*="surface"], [class*="area"], [class*="size"]').first().text().trim();
+        const loyerT = $(el).find('[class*="rent"], [class*="loyer"]').first().text().trim();
+        const href   = $(el).find('a').first().attr('href') || '';
 
-    for (const item of items) {
-      const text = item.text || item.markdown || '';
-      // Parse price+surface pairs from Yakeey markdown text
-      const blocks = text.split(/\n{2,}/);
-      for (const block of blocks) {
-        const priceMatch   = block.match(/(\d[\d\s]{3,8})\s*(?:DH|MAD|dh)/i);
-        const surfaceMatch = block.match(/(\d{2,3})\s*m[²2e]/i);
-        const loyerMatch   = block.match(/(\d[\d\s]{2,6})\s*DH\/mois/i);
-
-        if (!priceMatch) continue;
-        const prix = parsePrice(priceMatch[1]);
-        if (prix < 200000 || prix > CFG.maxPrice) continue;
-
-        const surface = surfaceMatch ? parseInt(surfaceMatch[1]) : null;
-        const loyer   = loyerMatch   ? parsePrice(loyerMatch[1]) : null;
-
-        // Extract title (first non-empty line in block)
-        const titre = block.split('\n').find(l => l.trim().length > 5)?.trim() || '';
+        const prix = parsePrice(priceT);
+        if (!prix || prix < 200000 || prix > CFG.maxPrice) return;
 
         listings.push({
           source:   'Yakeey',
-          titre,
-          quartier: extractQuartier(block + ' ' + titre),
-          surface,
+          titre:    title,
+          quartier: extractQuartier(locT || title),
+          surface:  extractSurface(surfT || title),
           prix,
-          loyer,
+          loyer:    loyerT ? parsePrice(loyerT) : null,
           date:     null,
-          url:      item.url || 'https://yakeey.com',
+          url:      href.startsWith('http') ? href : 'https://yakeey.com' + href,
         });
-      }
+      });
+
+      await new Promise(r => setTimeout(r, 1200));
     }
-    return listings;
   } catch (e) {
     console.error(`  ✗ Yakeey: ${e.message}`);
-    return [];
   }
+  return listings;
 }
 
 // ─── DEDUP ────────────────────────────────────────────────────────────────

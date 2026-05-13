@@ -212,17 +212,32 @@ if (ALLOWED_ID) {
   console.log('⏰  Cron scan quotidien actif (08h00 heure Casablanca)');
 }
 
-// ─── LAUNCH — mode webhook (évite conflit 409 entre instances) ────────────
-async function launch(attempt = 1) {
+// ─── LAUNCH — mode webhook ────────────────────────────────────────────────
+async function registerWebhook(attempt = 1) {
   try {
-    // 1. Enregistre le webhook sur Telegram
+    const info = await bot.telegram.getWebhookInfo();
+    if (info.url === WEBHOOK_URL) {
+      console.log('✅  Webhook déjà configuré');
+      return;
+    }
     await bot.telegram.setWebhook(WEBHOOK_URL, {
       allowed_updates: ['message'],
       drop_pending_updates: true,
     });
     console.log('✅  Webhook enregistré :', WEBHOOK_URL);
+  } catch (e) {
+    const retryAfter = e.response?.parameters?.retry_after;
+    if (retryAfter && attempt <= 5) {
+      console.log(`⏳  Rate limit — retry dans ${retryAfter + 2}s`);
+      await new Promise(r => setTimeout(r, (retryAfter + 2) * 1000));
+      return registerWebhook(attempt + 1);
+    }
+    throw e;
+  }
+}
 
-    // 2. Lance le serveur HTTP local pour recevoir les updates
+async function startServer(attempt = 1) {
+  try {
     await bot.launch({
       webhook: {
         domain: 'https://' + WEBHOOK_HOST,
@@ -230,19 +245,26 @@ async function launch(attempt = 1) {
         port:   PORT,
       },
       allowedUpdates: ['message'],
-      dropPendingUpdates: true,
+      dropPendingUpdates: false,
     });
     console.log('🤖  Bot démarré (webhook) sur port', PORT);
   } catch (e) {
-    const retryAfter = e.response?.parameters?.retry_after;
-    if (retryAfter && attempt <= 5) {
-      const delay = (retryAfter + 1) * 1000;
-      console.log(`⏳  Rate limit Telegram — retry dans ${retryAfter + 1}s (tentative ${attempt}/5)`);
-      setTimeout(() => launch(attempt + 1), delay);
-    } else {
-      console.error('Erreur launch fatale:', e.message);
-      process.exit(1);
+    if (e.code === 'EADDRINUSE' && attempt <= 10) {
+      console.log(`⏳  Port ${PORT} occupé — retry dans 3s (${attempt}/10)`);
+      await new Promise(r => setTimeout(r, 3000));
+      return startServer(attempt + 1);
     }
+    throw e;
+  }
+}
+
+async function launch() {
+  try {
+    await registerWebhook();
+    await startServer();
+  } catch (e) {
+    console.error('Erreur launch fatale:', e.message);
+    process.exit(1);
   }
 }
 

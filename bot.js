@@ -206,8 +206,25 @@ if (ALLOWED_ID) {
 }
 
 // ─── LAUNCH ───────────────────────────────────────────────────────────────
-bot.launch({ allowedUpdates: ['message'] });
-console.log('🤖  Bot Telegram démarré (long polling)');
+async function launch() {
+  try {
+    await bot.launch({
+      allowedUpdates: ['message'],
+      dropPendingUpdates: true,
+    });
+    console.log('🤖  Bot Telegram démarré (long polling)');
+  } catch (e) {
+    if (e.response?.error_code === 409) {
+      console.log('⚠️  409 Conflict — autre instance détectée, retry dans 5s...');
+      setTimeout(launch, 5000);
+    } else {
+      console.error('Erreur launch:', e.message);
+      process.exit(1);
+    }
+  }
+}
+
+launch();
 
 // Graceful stop
 process.once('SIGINT',  () => bot.stop('SIGINT'));

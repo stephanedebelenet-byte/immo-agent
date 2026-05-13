@@ -128,7 +128,7 @@ async function scrapeAvito() {
     const run = await apify.actor('easyapi/avito-search-results-scraper').call({
       search:   `appartement vente ${CFG.city}`,
       maxItems:  CFG.maxItems,
-    }, { memory: 4096, timeoutSecs: 120 });
+    }, { memory: 4096 });
 
     const { items } = await apify.dataset(run.defaultDatasetId).listItems({ limit: 150 });
 
@@ -168,7 +168,7 @@ async function scrapeFacebook() {
         `https://www.facebook.com/marketplace/casablanca/search/?query=appartement+${q}+vente`,
       ],
       maxListings: 20,
-    }, { memory: 2048, timeoutSecs: 120 })
+    }, { memory: 2048 })
     .then(run => apify.dataset(run.defaultDatasetId).listItems({ limit: 60 }))
     .then(({ items }) =>
       items
@@ -201,7 +201,7 @@ async function scrapeMubawab() {
     const run = await apify.actor('scraper_guru/mubawab-housing-scraper').call({
       city:     'casablanca',
       maxItems:  CFG.maxItems,
-    }, { memory: 4096, timeoutSecs: 180 });
+    }, { memory: 4096 });
 
     const { items } = await apify.dataset(run.defaultDatasetId).listItems({ limit: 150 });
 
@@ -236,7 +236,7 @@ async function scrapeYakeey() {
         url: `https://yakeey.com/fr-ma/achat?maxPrice=${CFG.maxPrice}&city=casablanca&type=appartement`,
       }],
       maxCrawlPages: 2,
-    }, { memory: 4096, timeoutSecs: 120 });
+    }, { memory: 4096 });
 
     const { items } = await apify.dataset(run.defaultDatasetId).listItems({ limit: 50 });
     const listings = [];

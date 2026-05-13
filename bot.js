@@ -8,11 +8,9 @@ const path                 = require('path');
 const http                 = require('http');
 const { runScraper, generateCSV, CFG } = require('./agent');
 
-// Webhook config (Railway fournit PORT + domaine public)
-const PORT         = process.env.PORT || 3000;
-const WEBHOOK_HOST = process.env.RAILWAY_PUBLIC_DOMAIN
-                   || process.env.WEBHOOK_DOMAIN
-                   || 'immo-agent-production-5dfb.up.railway.app';
+// Webhook config
+const PORT         = parseInt(process.env.PORT || '3000');
+const WEBHOOK_HOST = 'immo-agent-production-5dfb.up.railway.app';
 const WEBHOOK_PATH = '/tg/' + (process.env.TELEGRAM_BOT_TOKEN || '').slice(-10);
 const WEBHOOK_URL  = 'https://' + WEBHOOK_HOST + WEBHOOK_PATH;
 
@@ -217,18 +215,24 @@ if (ALLOWED_ID) {
 // ─── LAUNCH — mode webhook (évite conflit 409 entre instances) ────────────
 async function launch() {
   try {
+    // 1. Enregistre le webhook sur Telegram
+    await bot.telegram.setWebhook(WEBHOOK_URL, {
+      allowed_updates: ['message'],
+      drop_pending_updates: true,
+    });
+    console.log('✅  Webhook enregistré :', WEBHOOK_URL);
+
+    // 2. Lance le serveur HTTP local pour recevoir les updates
     await bot.launch({
       webhook: {
-        domain:      WEBHOOK_URL,
-        path:        WEBHOOK_PATH,
-        port:        PORT,
-        secretToken: process.env.TELEGRAM_BOT_TOKEN.slice(-20),
+        domain: 'https://' + WEBHOOK_HOST,
+        path:   WEBHOOK_PATH,
+        port:   PORT,
       },
       allowedUpdates: ['message'],
       dropPendingUpdates: true,
     });
-    console.log('🤖  Bot démarré (webhook) →', WEBHOOK_URL);
-    console.log('🌐  Écoute sur port', PORT);
+    console.log('🤖  Bot démarré (webhook) sur port', PORT);
   } catch (e) {
     console.error('Erreur launch:', e.message, e.response || '');
     process.exit(1);

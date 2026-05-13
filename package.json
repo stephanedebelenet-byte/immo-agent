@@ -1,0 +1,16 @@
+{
+  "name": "immo-agent-casablanca",
+  "version": "1.0.0",
+  "description": "Agent veille immobilière Casablanca — Avito, Facebook, Mubawab, Yakeey",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js",
+    "report": "node agent.js --report-only"
+  },
+  "dependencies": {
+    "apify-client": "^2.9.3",
+    "cron": "^4.4.0",
+    "dotenv": "^16.3.1",
+    "telegraf": "^4.16.3"
+  }
+}

@@ -5,7 +5,16 @@ const { Telegraf, Markup } = require('telegraf');
 const { CronJob }          = require('cron');
 const fs                   = require('fs');
 const path                 = require('path');
+const http                 = require('http');
 const { runScraper, generateCSV, CFG } = require('./agent');
+
+// Webhook config (Railway fournit PORT + domaine public)
+const PORT         = process.env.PORT || 3000;
+const WEBHOOK_HOST = process.env.RAILWAY_PUBLIC_DOMAIN
+                   || process.env.WEBHOOK_DOMAIN
+                   || 'immo-agent-production-5dfb.up.railway.app';
+const WEBHOOK_PATH = '/tg/' + (process.env.TELEGRAM_BOT_TOKEN || '').slice(-10);
+const WEBHOOK_URL  = 'https://' + WEBHOOK_HOST + WEBHOOK_PATH;
 
 // ─── SETUP ────────────────────────────────────────────────────────────────
 const BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN;
@@ -205,22 +214,24 @@ if (ALLOWED_ID) {
   console.log('⏰  Cron scan quotidien actif (08h00 heure Casablanca)');
 }
 
-// ─── LAUNCH ───────────────────────────────────────────────────────────────
+// ─── LAUNCH — mode webhook (évite conflit 409 entre instances) ────────────
 async function launch() {
   try {
     await bot.launch({
+      webhook: {
+        domain:      WEBHOOK_URL,
+        path:        WEBHOOK_PATH,
+        port:        PORT,
+        secretToken: process.env.TELEGRAM_BOT_TOKEN.slice(-20),
+      },
       allowedUpdates: ['message'],
       dropPendingUpdates: true,
     });
-    console.log('🤖  Bot Telegram démarré (long polling)');
+    console.log('🤖  Bot démarré (webhook) →', WEBHOOK_URL);
+    console.log('🌐  Écoute sur port', PORT);
   } catch (e) {
-    if (e.response?.error_code === 409) {
-      console.log('⚠️  409 Conflict — autre instance détectée, retry dans 5s...');
-      setTimeout(launch, 5000);
-    } else {
-      console.error('Erreur launch:', e.message);
-      process.exit(1);
-    }
+    console.error('Erreur launch:', e.message, e.response || '');
+    process.exit(1);
   }
 }
 

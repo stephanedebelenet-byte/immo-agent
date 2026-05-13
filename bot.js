@@ -178,8 +178,8 @@ bot.on('text', ctx => {
 
 // ─── CRON — SCAN AUTO QUOTIDIEN ───────────────────────────────────────────
 if (ALLOWED_ID) {
-  const job = new CronJob('0 8 * * *', async () => {
-    console.log('[CRON] Scan automatique 08h00');
+  const job = new CronJob('0 8 */2 * *', async () => {
+    console.log('[CRON] Scan automatique 08h00 (tous les 2 jours)');
     try {
       const listings = await runScraper();
       lastResults  = listings;

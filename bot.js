@@ -6,7 +6,7 @@ const { CronJob }          = require('cron');
 const fs                   = require('fs');
 const path                 = require('path');
 const http                 = require('http');
-const { runScraper, generateCSV, CFG } = require('./agent');
+const { runScraper, runQuickScan, generateCSV, CFG } = require('./agent');
 
 // Webhook config
 const PORT         = parseInt(process.env.PORT || '3000');
@@ -125,8 +125,10 @@ bot.command('start', ctx => {
     `/top20 — Top 20 du dernier scan\n` +
     `/csv — Recevoir le CSV complet\n` +
     `/status — Statut et dernier scan\n` +
+    `/schedule — Voir le planning des scans auto\n` +
+    `/budget 2500000 — Changer le budget max\n` +
     `/help — Aide\n\n` +
-    `📅 Scan automatique tous les jours à 08h00`
+    `📅 6 scans automatiques/jour aux heures de pic`
   );
 });
 
@@ -171,27 +173,46 @@ bot.command('budget', ctx => {
   ctx.reply(`✅ Budget mis à jour : ${n.toLocaleString('fr-FR')} MAD\nLance /scan pour relancer avec ce budget.`);
 });
 
-// Gestion texte libre
-bot.on('text', ctx => {
-  ctx.reply('Commandes disponibles : /scan /top10 /csv /status /help');
+bot.command('schedule', ctx => {
+  ctx.replyWithMarkdown(
+    `⏰ *Planning des scans automatiques* (heure Casablanca)\n\n` +
+    `*Scans COMPLETS* (Avito + Mubawab + Yakeey + Facebook) :\n` +
+    `• 08h00 — tous les jours\n` +
+    `• 09h00 — tous les lundis (post-weekend)\n` +
+    `• 09h00 — 1er, 2 et 3 du mois (fins de bail)\n` +
+    `• 19h00 — 27 au 30 du mois (anticipation)\n\n` +
+    `*Scans RAPIDES* (Avito + Mubawab + Yakeey, gratuits) :\n` +
+    `• 12h30 — tous les jours (pic midi)\n` +
+    `• 18h30 — tous les jours (pic soir)\n\n` +
+    `Lance /scan pour un scan immédiat.`
+  );
 });
 
-// ─── CRON — SCAN AUTO QUOTIDIEN ───────────────────────────────────────────
+// Gestion texte libre
+bot.on('text', ctx => {
+  ctx.reply('Commandes disponibles : /scan /top10 /top20 /csv /status /schedule /budget /help');
+});
+
+// ─── CRON — PLANNING INTELLIGENT ─────────────────────────────────────────
 if (ALLOWED_ID) {
-  const job = new CronJob('0 8 */2 * *', async () => {
-    console.log('[CRON] Scan automatique 08h00 (tous les 2 jours)');
+
+  // Scan COMPLET : Avito + Mubawab + Yakeey + Facebook (Apify)
+  const runAutoFull = async (label) => {
+    if (isRunning) return;
+    isRunning = true;
+    console.log(`[CRON] ${label}`);
     try {
       const listings = await runScraper();
       lastResults  = listings;
       lastScanDate = new Date();
+      isRunning    = false;
       await bot.telegram.sendMessage(ALLOWED_ID,
-        `☀️ *Scan matinal terminé* — ${listings.length} annonces\nBudget max : ${CFG.maxPrice.toLocaleString('fr-FR')} MAD`,
+        `☀️ *${label} terminé* — ${listings.length} annonces\nBudget max : ${CFG.maxPrice.toLocaleString('fr-FR')} MAD`,
         { parse_mode: 'Markdown' }
       );
-      // Top 5 en résumé matinal
       if (listings.length) {
         const top5 = listings.slice(0, 5);
-        let msg = `🏆 *Top 5 du jour :*\n\n`;
+        let msg = `🏆 *Top 5 :*\n\n`;
         top5.forEach((l, i) => {
           msg += `${i+1}. [${l.source}] ${l.quartier} — ${fmtPrice(l.prix)}`;
           if (l.rentBrut) msg += ` — *${l.rentBrut}%*`;
@@ -204,12 +225,61 @@ if (ALLOWED_ID) {
         });
       }
     } catch (e) {
-      console.error('[CRON] Error:', e.message);
-      await bot.telegram.sendMessage(ALLOWED_ID, `❌ Scan auto échoué : ${e.message}`).catch(() => {});
+      isRunning = false;
+      console.error(`[CRON] ${label} error:`, e.message);
+      await bot.telegram.sendMessage(ALLOWED_ID, `❌ ${label} échoué : ${e.message}`).catch(() => {});
     }
-  }, null, true, 'Africa/Casablanca');
+  };
 
-  console.log('⏰  Cron scan quotidien actif (08h00 heure Casablanca)');
+  // Scan RAPIDE : Avito + Mubawab + Yakeey seulement (gratuit)
+  const runAutoQuick = async (label) => {
+    if (isRunning) return;
+    isRunning = true;
+    console.log(`[CRON] ${label}`);
+    try {
+      const listings = await runQuickScan();
+      lastResults  = listings;
+      lastScanDate = new Date();
+      isRunning    = false;
+      const top3 = listings.slice(0, 3);
+      if (!top3.length) return;
+      let msg = `⚡ *${label}* — ${listings.length} annonces\n\n`;
+      top3.forEach((l, i) => {
+        msg += `${i+1}. [${l.source}] ${l.quartier} — ${fmtPrice(l.prix)}`;
+        if (l.rentBrut) msg += ` — *${l.rentBrut}%*`;
+        if (l.url) msg += `\n🔗 ${l.url}`;
+        msg += '\n\n';
+      });
+      await bot.telegram.sendMessage(ALLOWED_ID, msg, {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+      });
+    } catch (e) {
+      isRunning = false;
+      console.error(`[CRON] ${label} error:`, e.message);
+    }
+  };
+
+  // 08h00 quotidien  — scan complet (tous les jours)
+  new CronJob('0 8 * * *',   () => runAutoFull('Scan complet matinal'),    null, true, 'Africa/Casablanca');
+  // 09h00 lundi      — post-weekend, beaucoup de nouvelles annonces
+  new CronJob('0 9 * * 1',   () => runAutoFull('Lundi matin (complet)'),   null, true, 'Africa/Casablanca');
+  // 09h00 1-3        — début de mois, fins de bail
+  new CronJob('0 9 1-3 * *', () => runAutoFull('Début de mois (complet)'), null, true, 'Africa/Casablanca');
+  // 12h30 quotidien  — pic midi (rapide, gratuit)
+  new CronJob('30 12 * * *', () => runAutoQuick('Pic midi (rapide)'),      null, true, 'Africa/Casablanca');
+  // 18h30 quotidien  — pic soir (rapide, gratuit)
+  new CronJob('30 18 * * *', () => runAutoQuick('Pic soir (rapide)'),      null, true, 'Africa/Casablanca');
+  // 19h00 27-30      — fin de mois, anticipation nouvelles annonces
+  new CronJob('0 19 27-30 * *', () => runAutoFull('Fin de mois (complet)'), null, true, 'Africa/Casablanca');
+
+  console.log(`⏰  Planning actif (heure Casablanca) :
+    08h00 quotidien  → Scan complet
+    09h00 lundi      → Scan complet (post-weekend)
+    09h00 1-3/mois   → Scan complet (début de mois)
+    12h30 quotidien  → Scan rapide (pic midi)
+    18h30 quotidien  → Scan rapide (pic soir)
+    19h00 27-30/mois → Scan complet (fin de mois)`);
 }
 
 // ─── LAUNCH — mode webhook ────────────────────────────────────────────────

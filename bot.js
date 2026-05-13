@@ -213,7 +213,7 @@ if (ALLOWED_ID) {
 }
 
 // ─── LAUNCH — mode webhook (évite conflit 409 entre instances) ────────────
-async function launch() {
+async function launch(attempt = 1) {
   try {
     // 1. Enregistre le webhook sur Telegram
     await bot.telegram.setWebhook(WEBHOOK_URL, {
@@ -234,8 +234,15 @@ async function launch() {
     });
     console.log('🤖  Bot démarré (webhook) sur port', PORT);
   } catch (e) {
-    console.error('Erreur launch:', e.message, e.response || '');
-    process.exit(1);
+    const retryAfter = e.response?.parameters?.retry_after;
+    if (retryAfter && attempt <= 5) {
+      const delay = (retryAfter + 1) * 1000;
+      console.log(`⏳  Rate limit Telegram — retry dans ${retryAfter + 1}s (tentative ${attempt}/5)`);
+      setTimeout(() => launch(attempt + 1), delay);
+    } else {
+      console.error('Erreur launch fatale:', e.message);
+      process.exit(1);
+    }
   }
 }
 
